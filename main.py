@@ -1,4 +1,4 @@
-from flask import Flask, request
+from flask import Flask, request, abort, redirect
 import secrets
 import string
 
@@ -34,3 +34,16 @@ def returns_short_url():
     long_url = long_url.get('url')
     new_short_url = shorten_url(long_url)
     return new_short_url
+
+# GET route
+@app.get('/<short_url>')
+def get_url(short_url):
+    if short_url in dict_url:
+        long_url = dict_url[short_url]
+        return redirect(long_url)
+    else:
+        abort(404)
+
+# flask run
+if __name__ == "__main__":
+    app.run(debug=True)
