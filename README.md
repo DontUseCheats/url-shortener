@@ -36,3 +36,7 @@ Two different endpoints. One where URL shortening is created and is sent back to
 
 ### secrets string
 To create true randomness when shortening URLs we import secrets as its designed for security and cryptography while random is meant to be used for modelling and simulaton.
+
+## Challenges/Process
+
+I first created a variable (alphabet) that contained random string values and numbers. Then created a function that when called returns a variable (short_url) with values containing 6 values of alphabet. Then created a while loop that checks if the newly short url already exists and if it does then reassign short url with the function call again. If it does not exist already then the code continues to where the dict is assigned the short url along with its long url partner.
