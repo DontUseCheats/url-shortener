@@ -139,4 +139,27 @@ Line 12-15: commit first, close open connections then return value
 
 ### Takeaways
 MySQL commands written in python has to be between " " in order for python to know. %s serve as placeholder values to relate to whats being changed. Reason being is security standard to prevent SQL injection. With whats being changed after MySQL command "" needs to be a tuple example Line 9.
+
+### GET route refactor to MySQL
+    1 @app.get('/<short_url>')
+    2 def get_url(short_url):
+    3     connection = get_connection()
+    4     cursor = connection.cursor()
+    5     cursor.execute("SELECT long_url FROM urls WHERE short_url = %s", (short_url,))
+    6     fetched_long_url = cursor.fetchone()
+    7     if fetched_long_url == None:
+    8         abort(404)
+    9     fetched_long_url = fetched_long_url[0]
+    10    cursor.close()
+    11    connection.close()
+    12    return redirect(fetched_long_url)
+
+Line 3-4: Opening connecctions  
+Line 5: Selecting long_url from table where short_url matches short_url in the database  
+Line 6: Assign retrieved long url to variable fetched_long_url  
+Line 7: If no match was found then rise error 404  
+Line 9: fetchone retrieves a tuple so reassign fetched_long_url to first argument in tuple  
+Line 10-11: close connections, no commit since no changes in database  
+Line 12: return a redirect to the retrieved long url
+
  
