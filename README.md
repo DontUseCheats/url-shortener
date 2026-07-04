@@ -93,3 +93,47 @@ returns a 302 redirect to the original URL. 404 is returned if the
 short code doesn't exist in dict_url. Important: dict_url resets on 
 every server restart since it lives in memory — this is why Phase 2 
 adds MySQL for persistent storage.
+
+### Obstacle 2 (Refactor function to MySQL)
+My function def shorten_url(inputted_long_url) had to be refactored into MySQL comptability to connect with my code. Installed MySQL and library mysql.connector. I learned that when creating a connection to MySQL its better to create a function that initializes the connection rather than wrapping the whole code under one instance. Reason being is that connectivity issues or disconnection can cut the MySQL connection midway so its better to have individual instances to call the connector when needed. 
+
+    # Function to connect MySQL to python
+    def get_connection():
+        connection = mysql.connector.connect(
+            host = 'localhost',
+            user = 'root',
+            password = '',
+            database = 'url_shortener'
+        )
+        return connection
+
+---
+
+    # Refactored function to MySQL connection with Python
+    1 def shorten_url(inputted_long_url):
+    2     new_short_url = create_short_url()
+    3     connection = get_connection()
+    4     cursor = connection.cursor()
+    5     cursor.execute("SELECT short_url FROM urls where short_url = %s", (new_short_url,))
+    6     fetched_url_row = cursor.fetchone()
+    7     while fetched_url_row != None:
+    8         new_short_url = create_short_url()
+    9         cursor.execute("SELECT short_url FROM urls where short_url = %s", (new_short_url,))
+    10        fetched_url_row = cursor.fetchone()
+    11    cursor.execute("INSERT INTO urls (short_url, long_url) VALUES (%s, %s)", (new_short_url, inputted_long_url))
+    12    connection.commit()
+    13    cursor.close()
+    14    connection.close()
+    15    return new_short_url
+
+Line 3: creates and assigns connection between MySQL and Python.  
+Line 4: creates cursor object to execute commands and retrieve data through it  
+Line 5: create MySQL command ("SELECT {column} FROM {table name} where {column} = {placeholder value}", (new_short_url,)) Has to be a tuple even with one value so trailing comma is required
+Line 6: retrieves entire row from table, Returns None if no exact match between new_short_url and retrieved row  
+Line 7-10: while loop check - if retrieved row doesn't equal the value of None then a duplicate was found so new url is created  
+Line 11: execute command to insert new data  
+Line 12-15: commit first, close open connections then return value
+
+### Takeaways
+MySQL commands written in python has to be between " " in order for python to know. %s serve as placeholder values to relate to whats being changed. Reason being is security standard to prevent SQL injection. With whats being changed after MySQL command "" needs to be a tuple example Line 9.
+ 
