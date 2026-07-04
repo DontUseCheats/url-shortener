@@ -34,10 +34,14 @@ Phase 5 - Set up CI/CD with GitHub Actions
 
 Two different endpoints. One where URL shortening is created and is sent back to user. Two is when someone uses that short URL where they are then redirected to the original website.
 
-    -git checkout -b (name-of-branch)
-    -git branch
+    git checkout -b (name-of-branch)
+    git branch
 
 This is to create a new branch in the repo and git branch is what allows us to see which branch we're currently in.
+
+    git push -u origin (name-of-branch)
+
+When creating a new local branch for the first time we have to tell and push the branch to create it on GitHub too.
 
 
 ### secrets string
@@ -79,3 +83,13 @@ Breaking the process down into chunks of what I need to do. The GET request has 
             abort(404)
 
 First line is the GET request and saves whatever is after / as the value to be stored in short_url. Then we def the get_url function and save the GET parameter value inside the function get_url parameters. Then if that short_url value which is the key finds and matches with itself in dict_url we initialize long_url as a new variable to hold the value of its key partner and then return its redirect route to the newly saved long_url. Else if it does not find a match then else we abort with error 404. 404 Not Found is the industry standard HTTP status code meaning the requested resource does not exist. Meaning short_url was not found in dict_url.
+
+### Postman
+
+Tested both routes using Postman with Flask running locally on 
+http://127.0.0.1:5000. POST request to /shorten with a JSON body 
+returns a short code with 200 OK. GET request to /<short_code> 
+returns a 302 redirect to the original URL. 404 is returned if the 
+short code doesn't exist in dict_url. Important: dict_url resets on 
+every server restart since it lives in memory — this is why Phase 2 
+adds MySQL for persistent storage.
