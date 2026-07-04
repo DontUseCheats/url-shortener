@@ -7,10 +7,6 @@ import mysql.connector
 # Flask app initialization
 app = Flask(__name__)
 
-
-# Declare empty dict
-dict_url = {}
-
 # Generate random letters and numbers
 alphabet = string.ascii_letters + string.digits
 
@@ -20,7 +16,7 @@ def get_connection():
     connection = mysql.connector.connect(
         host = 'localhost',
         user = 'root',
-        password = '',
+        password = 'password',
         database = 'url_shortener'
     )
     return connection
@@ -48,7 +44,7 @@ def shorten_url(inputted_long_url):
     return new_short_url
 
 
-# POST route (later on needs postman for request.get_json)
+# POST route (Postman contract testing for request.get_json)
 @app.route('/shorten', methods = ['POST'])
 def returns_short_url():
     long_url = request.get_json()
@@ -56,14 +52,20 @@ def returns_short_url():
     new_short_url = shorten_url(long_url)
     return new_short_url
 
-# GET route
+# GET route Refactored into MySQL
 @app.get('/<short_url>')
 def get_url(short_url):
-    if short_url in dict_url:
-        long_url = dict_url[short_url]
-        return redirect(long_url)
-    else:
+    connection = get_connection()
+    cursor = connection.cursor()
+    cursor.execute("SELECT long_url FROM urls WHERE short_url = %s", (short_url,))
+    fetched_long_url = cursor.fetchone()
+    if fetched_long_url == None:
         abort(404)
+    fetched_long_url = fetched_long_url[0]
+    cursor.close()
+    connection.close()
+    return redirect(fetched_long_url)
+
 
 # flask run
 if __name__ == "__main__":

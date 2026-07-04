@@ -68,6 +68,9 @@ I had a challenging time understanding the POST request I was suppose to make.
         new_short_url = shorten_url(long_url)
         return new_short_url
 
+long_url.get('url') where 'url' is the chosen key name as written out in the Postman contract  
+{"url": "https://example.com"}
+
  I created long_url then assigned it requests.get_json() which in theory would return {"url": "example.com"} What I didn't understand was how requests.get_json() was returning that example when all I did was initialize a new variable and assigned it to requests.get. I knew that requests.get_json() returns what the user inputted. But I didn't understand why they would input a dict instead of just the raw url link. What I found out was that when sending data over HTTP you can't just send a raw string. JSON is the standard format APIs use to structure data in requests and responses. It's the default industry standard and every real API works this way.
 
 ### GET request
