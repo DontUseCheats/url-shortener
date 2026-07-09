@@ -1,5 +1,9 @@
 # README
-    **Note:** This README was first written through my own raw input of thought process, documentation and questions I had asked in claude. Look at earlier commits to read the raw process. Only then was it refactored into claude for the sole purpose of a cleaner and easier understanding process.
+> **Note:** This README was first written through my own raw input of 
+> thought process, documentation and questions I had asked in Claude. 
+> Look at earlier commits to read the raw process. Only then was it 
+> refactored into Claude for the sole purpose of a cleaner and easier 
+> understanding process.
 
 # url-shortener
 A backend service that shortens URLs, stores them in a database, and 
