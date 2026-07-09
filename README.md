@@ -43,7 +43,6 @@ This is to create a new branch in the repo and git branch is what allows us to s
 
 When creating a new local branch for the first time we have to tell and push the branch to create it on GitHub too.
 
-
 ### secrets string
 To create true randomness when shortening URLs we import secrets as its designed for security and cryptography while random is meant to be used for modelling and simulaton.
 
@@ -56,6 +55,7 @@ The first route I'm assuming would be the route where it receives the user input
 
 ## Challenges/Process
 
+### Phase 1 - Create local flask code
 I first created a variable (alphabet) that contained random string values and numbers. Then created a function that when called returns a variable (short_url) with values containing 6 values of alphabet. Then created a while loop that checks if the newly short url already exists and if it does then reassign short url with the function call again. If it does not exist already then the code continues to where the dict is assigned the short url along with its long url partner. Refactored shorten code into one function which calls on create_short_url function.
 
 ### Obstacle 1 (POST request)
@@ -97,6 +97,7 @@ short code doesn't exist in dict_url. Important: dict_url resets on
 every server restart since it lives in memory — this is why Phase 2 
 adds MySQL for persistent storage.
 
+### Phase 2 - Adding and refactoring for MySQL
 ### Obstacle 2 (Refactor function to MySQL)
 My function def shorten_url(inputted_long_url) had to be refactored into MySQL comptability to connect with my code. Installed MySQL and library mysql.connector. I learned that when creating a connection to MySQL its better to create a function that initializes the connection rather than wrapping the whole code under one instance. Reason being is that connectivity issues or disconnection can cut the MySQL connection midway so its better to have individual instances to call the connector when needed. 
 
@@ -162,4 +163,87 @@ Line 9: fetchone retrieves a tuple so reassign fetched_long_url to first argumen
 Line 10-11: close connections, no commit since no changes in database  
 Line 12: return a redirect to the retrieved long url
 
+### Phase 3 - Docker
+Docker packages our whole application (code), dependencies (libraries) and its environments (Python, Ubuntu, OS) all into one package.  
+
+Dockerfile -> Text file with instructions that tells Docker how to build your container.  
+ 1 -> Start with base image (Python on Ubuntu)  
+ 2 -> Set a working directory inside the container  
+ 3 -> Copy dependencies in  
+ 4 -> Install my dependencies 
+ 5 -> Copy code and install code   
+ 5 -> Run my app
+
+docker-compose -> Tool that lets you run multiple containers together. For this project we'll have Flask app in one container and MySQL in another, connected together.  
+ 1 -> I have Flask container  
+ 2 -> I have MySQL container  
+ 3 -> Connect them together
+
+Reason being is that if Flask and MySQL were under one container then multiple user created instances would create multiple MySQL databases. Two containers allow users to create multiple Flask instances while the other container (MySQL) is only run once with a persistent database across all Flask instances.
+
+Dockerfile serves as the template for just our Flask container. The official Python image is just a starting point and it doesn't have our code, dependencies or the main.py file. Dockerfile serves as a base image and then we add everything specific about our app on top of it. 
+
+MySQL is different. The official MySQL image is already a complete ready to run database server. We just need to configure it with environment variables (password, database name) in docker-compose.
+
+Essentially:  
+ - Flask -> needs a Dockerfile because we're building on top of the Python base image with our own code  
+ - MySQL -> No Dockerfile needed, the official immage is complete as is and just needs configuration in docker-compose
  
+ ### Takeaways
+### What is Docker?
+Docker is software that packages your application, its dependencies, 
+and its environment into a container that runs identically anywhere 
+Docker is installed — your laptop, a teammate's machine, or an AWS server.
+
+### Files Created
+
+**Dockerfile** — a blueprint that tells Docker how to build the Flask 
+container. It specifies the Python version, creates a working directory 
+(/app), copies and installs dependencies from requirements.txt first 
+(for layer caching — so dependencies don't reinstall on every code change), 
+then copies main.py and runs it with CMD.
+
+**docker-compose.yml** — the instruction manual that defines and 
+orchestrates both containers (called services):
+- `mysql-db` — pulls the official MySQL 8.0 image from Docker Hub and 
+configures it with environment variables (database name and root password)
+- `web` — builds the Flask container from our Dockerfile, maps port 5000, 
+syncs local code via volumes, and depends_on mysql-db so MySQL starts first
+
+We keep Flask and MySQL in separate containers so only one MySQL instance 
+runs regardless of how many Flask containers are running — keeping the 
+database persistent and consistent across instances.
+
+**init.sql** — the MySQL container starts fresh with only the database 
+created via environment variable. init.sql runs automatically on first 
+startup via /docker-entrypoint-initdb.d/ and creates the urls table with 
+its three columns: id, short_url, and long_url.
+
+**requirements.txt** — lists all Python dependencies (flask, 
+mysql-connector-python) so Docker can install them automatically 
+during the build.
+
+### Key Changes in main.py
+Two changes were needed for Docker compatibility:
+1. Changed host='localhost' to host='mysql-db' in get_connection() — 
+inside Docker, localhost refers to the container itself. Flask finds 
+MySQL using the service name 'mysql-db' since they're in separate containers.
+2. Changed app.run(debug=True) to app.run(host='0.0.0.0', debug=True) — 
+by default Flask only listens inside its own container. 0.0.0.0 tells 
+Flask to listen on all network interfaces so your machine can reach it.
+
+### Docker Commands
+- `sudo docker compose up --build -d` — builds and starts all containers 
+in detached mode (runs in background)
+- `sudo docker compose stop` — stops containers but keeps data
+- `sudo docker compose down` — stops and removes containers (data lost 
+without named volume)
+- `sudo docker ps` — lists all running containers
+
+### Data Persistence Notes
+Current setup: data persists across stop/start but not across down/up.
+
+Saved for later:
+- Add MySQL named volume so data survives docker compose down
+- Use AWS RDS in Phase 4 as the production database 
+(single source of truth for all users)

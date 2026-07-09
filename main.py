@@ -14,7 +14,7 @@ alphabet = string.ascii_letters + string.digits
 # Function to connect MySQL to python
 def get_connection():
     connection = mysql.connector.connect(
-        host = 'localhost',
+        host = 'mysql-db',
         user = 'root',
         password = 'password',
         database = 'url_shortener'
@@ -69,4 +69,4 @@ def get_url(short_url):
 
 # flask run
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(host='0.0.0.0', debug=True)

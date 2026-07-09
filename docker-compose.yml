@@ -1,0 +1,23 @@
+# Container instructions for MySQL
+services:
+  mysql-db:
+    image: mysql:8.0
+    environment:
+      - MYSQL_DATABASE=url_shortener
+      - MYSQL_ROOT_PASSWORD=password
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+
+
+  # Container instructions for Flask for our code
+  web:
+    build: .
+    container_name: flask_code
+    ports:
+      - "5000:5000"
+    volumes:
+      - .:/app
+    depends_on:
+      - mysql-db
