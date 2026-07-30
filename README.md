@@ -74,7 +74,9 @@ the database table on first startup. docker-compose connects everything.
 
 ### Phase 4 - AWS Deployment
 The Docker containers are deployed to an AWS EC2 instance giving the app 
-a real public URL accessible from anywhere on the internet.
+a real public URL accessible from anywhere on the internet. EC2 pulls the 
+Flask image from ECR (Elastic Container Registry) and the MySQL image from 
+Docker Hub, runs both containers, and serves the API publicly on port 5000.
 
 ### Phase 5 - CI/CD with GitHub Actions
 A GitHub Actions workflow automatically runs on every push — tests the code 
@@ -132,9 +134,10 @@ was to write:
     while new_short_url not in dict_url:
         dict_url[new_short_url] = inputted_long_url
 
-This is backwards. "while the code is NOT in 
-the dict, keep adding it." That adds the same code over and over on the 
-happy path (industry standard terminology) and does nothing when there's a collision.
+This is backwards. "while the code is NOT in the dict, keep adding it." 
+That adds the same code over and over on the happy path (industry standard 
+terminology for the expected, error-free flow) and does nothing when there's 
+a collision.
 
 The correct logic: the while loop's only job is regenerating. The dict 
 assignment happens after the loop exits — at that point you're guaranteed 
@@ -160,21 +163,22 @@ directly, not if it's imported." Important for Docker and other tools
 that import your app without wanting to start the server.
 
 ### Obstacle 1 — Understanding POST and request.get_json()
-This took a while to understand as I didn't have prior knowledge of Postman. I created long_url = request.get_json() 
-and while looking at examples I couldn't understand how Flask knew to return {"url": "https://example.com"} 
+This took a while to understand as I didn't have prior knowledge of Postman. 
+I created long_url = request.get_json() and while looking at examples I 
+couldn't understand how Flask knew to return {"url": "https://example.com"} 
 when I never defined that anywhere.
 
 The answer: it doesn't know. request represents whatever the user sends. 
 get_json() reads the request body and converts it from JSON to a Python dict. 
-The format {"url": "..."} is the API contract I decided on in Postman, users must 
-send data in that format. In Postman I play the role of the user and send 
-exactly that.
+The format {"url": "..."} is the API contract I decided on in Postman — users 
+must send data in that format. In Postman I play the role of the user and 
+send exactly that.
 
 The follow-up confusion: why send a dict at all? Why not just the raw URL?
 
 The answer: industry standard. When sending data over HTTP you can't just 
 send a raw string. JSON is what every API, frontend, and tool expects. It's 
-also easier to extend, if you later want to add a custom alias alongside 
+also easier to extend — if you later want to add a custom alias alongside 
 the URL, JSON handles that with no restructuring.
 
 ### Routes
@@ -228,8 +232,8 @@ would send.
 
 Tested locally on http://127.0.0.1:5000  
 (127.0.0.1 always means "this machine", port 5000 is Flask's default.
-Understanding ports as unique identifiers, Flask listens at unique identifier number 5000, 
-MySQL listens at 3306, web traffic uses 80 or 443)
+Ports are unique identifiers — Flask listens at 5000, MySQL at 3306, 
+web traffic uses 80 or 443)
 
 - POST to /shorten with {"url": "https://www.google.com"} → short code, 200 OK
 - GET to /<short_code> → Google's HTML, 302 redirect
@@ -378,12 +382,12 @@ starts in seconds.
 ### Image vs Container
 A Dockerfile is a text file with instructions that tells Docker how to 
 build your app. When you run docker build, Docker reads those instructions 
-and produces an Image — a complete, packaged, ready-to-run version of your 
-app frozen in time. Good to think of the image as the finished, installable package.
+and produces an Image — the complete, packaged, ready-to-run version of 
+the app frozen at that point in time.
 
 A Container is what you get when you actually run that image. It's the 
-live, running instance of your app. You can run multiple containers from 
-the same image — each one is independent.
+live, running instance of the app. You can run multiple containers from 
+the same image where each container is independent.
 
 So the process is:
 1. You write the Dockerfile (the instructions)
@@ -393,9 +397,14 @@ So the process is:
 ### Why two containers
 Keeping Flask and MySQL in separate containers means only one MySQL 
 instance runs regardless of how many Flask containers are running. This 
-was a key insight and learning step. If they were in the same container, scaling Flask 
+was a key insight — if they were in the same container, scaling Flask 
 would create multiple databases. Separated, you can run as many Flask 
 instances as you need while the one MySQL container holds all the data.
+
+Flask and MySQL run continuously on EC2 — not per user. Flask handles 
+multiple users simultaneously through request handling. One Flask container 
+can serve hundreds of requests at the same time. MySQL runs continuously 
+and serves as the single database for everyone.
 
 ### Docker Hub
 Public registry of pre-built images. FROM python:3.12 and 
@@ -454,7 +463,9 @@ Python standard library — built in, no installation needed.
           - mysql-db          # don't start Flask until MySQL is ready
 
 Service names (mysql-db, web) are not just labels — they become hostnames 
-that containers use to find each other on Docker's internal network. This was important to learn and understand as later on in Obstacle 4 main.py will be updated. Specifically 'localhost' and app.run(debug=True).
+that containers use to find each other on Docker's internal network. This 
+becomes important in Phase 4 when main.py needs to be updated to use 
+'mysql-db' instead of 'localhost'.
 
 ### init.sql
 The MySQL container creates the database automatically via environment 
@@ -485,9 +496,7 @@ Change 1: host='localhost' → host='mysql-db'
 Inside Docker, localhost refers to the container itself — not the MySQL 
 container next to it. Each container is its own isolated environment. 
 Docker's networking maps service names to container IPs automatically, 
-so 'mysql-db' routes to the MySQL container. Same concept as changing 
-a hardcoded path to a variable — you're telling things where to look 
-across container boundaries.
+so 'mysql-db' routes to the MySQL container.
 
 Change 2: app.run(debug=True) → app.run(host='0.0.0.0', debug=True)
 Flask defaults to listening on 127.0.0.1 — only inside its own container. 
@@ -498,7 +507,7 @@ change Postman gets "socket hang up" even with the port correctly mapped.
 
 ### Obstacle 5 — Port conflict on first run
 First docker compose run failed: "address already in use" on port 3306. 
-My local MySQL service was already running and claimed that port. Docker's 
+Local MySQL service was already running and claimed that port. Docker's 
 MySQL container couldn't bind to it. Fixed by stopping local MySQL:
 
     sudo service mysql stop
@@ -518,7 +527,9 @@ installing the newer Docker Compose plugin (docker compose with space):
     sudo docker compose up --build -d   # build and start in background
     sudo docker compose stop            # pause containers, data safe
     sudo docker compose down            # remove containers
+    sudo docker compose down -v         # remove containers AND volumes
     sudo docker ps                      # list running containers
+    sudo docker logs <name> --follow    # watch container logs in real time
     sudo docker exec -it <name> mysql -u root -p  # access MySQL inside container
 
 ### Understanding detached mode (-d)
@@ -528,10 +539,9 @@ containers run in the background and your terminal is free. Use
 sudo docker ps to check status and sudo docker logs <name> to see logs.
 
 ### Data Persistence — stop vs down
-This distinction matters more than it seems:
-
 - stop → containers paused, data safe (like sleep mode)
 - down → containers removed, data gone
+- down -v → containers AND volumes removed, complete clean slate
 
 Named volume would fix the down problem — stores MySQL data in a Docker 
 managed volume that exists independently of the container. Even after 
@@ -539,8 +549,6 @@ docker compose down destroys the container, the volume survives. Next
 docker compose up mounts the same volume with all existing data.
 
 ### Named volume vs AWS RDS — two different problems
-These solve different things entirely:
-
 Named volume — "my data survives on my machine across container restarts"
 AWS RDS — "everyone shares the same data regardless of where they're running"
 
@@ -551,7 +559,268 @@ data and proper container management for restarts.
 
 ---
 
+## Phase 4 - AWS Deployment
+
+### What is AWS EC2 and why we need it
+EC2 (Elastic Compute Cloud) is a virtual machine running in Amazon's data 
+center. Your app right now only runs on your laptop — when you close it 
+the app goes down and nobody can reach it. EC2 gives you a computer that:
+- Is always on
+- Has a public IP address anyone on the internet can reach
+- Runs your Docker containers 24/7
+
+### What is ECR and why we need it
+ECR (Elastic Container Registry) is AWS's private Docker image registry. 
+Your Docker image lives on your laptop. EC2 is a completely separate 
+computer in Amazon's data center with no access to your machine. ECR is 
+the middleman — you push your image there, EC2 pulls it from there.
+
+Think of it like GitHub but for Docker images instead of code:
+- GitHub stores your code, any machine can clone it
+- ECR stores your Docker images, any server can pull it
+
+MySQL doesn't need ECR because it uses the official public mysql:8.0 image 
+from Docker Hub — EC2 pulls it directly. Only your custom Flask image 
+needs ECR since it's private.
+
+### Step by step — what we did and why
+
+**Step 1 — Install AWS CLI on local machine**
+
+    curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+    unzip awscliv2.zip
+    sudo ./aws/install
+
+The AWS CLI lets you interact with AWS services from your terminal. Same 
+concept as how you interact with Docker and MySQL from the terminal — 
+instead of clicking through the AWS console, you run commands.
+
+**Step 2 — Create IAM access key and configure CLI**
+
+    aws configure
+
+Never use the root account for day to day work — industry standard. Created 
+an IAM user with specific permissions. Generated access keys (Access Key ID 
+and Secret Access Key) which are the credentials that authenticate your 
+terminal to your AWS account. Like logging in but for the CLI.
+
+    aws sts get-caller-identity  # verify credentials are working
+
+**Step 3 — Create ECR repository**
+
+    aws ecr create-repository --repository-name url-shortener --region us-west-1
+
+Creates an empty storage location in AWS — like creating an empty GitHub repo. 
+Returns a repositoryUri that you'll use to tag and push your image.
+
+    repositoryUri: 801498844513.dkr.ecr.us-west-1.amazonaws.com/url-shortener
+
+**Step 4 — Authenticate Docker to ECR**
+
+    aws ecr get-login-password --region us-west-1 | sudo docker login --username AWS --password-stdin 801498844513.dkr.ecr.us-west-1.amazonaws.com
+
+AWS CLI and Docker are two separate systems. Docker has no idea about your 
+AWS credentials. This command uses your AWS credentials to generate a 
+temporary Docker login token (valid 12 hours) and passes it to Docker. 
+After this Docker has permission to push/pull from your private ECR repository.
+
+Must be re-run every session since the token expires after 12 hours.
+
+**Step 5 — Build Docker image locally**
+
+    sudo docker build -t url-shortener .
+
+Reads the Dockerfile in the current directory (.) and builds a Docker image 
+called url-shortener stored locally on your machine. The . tells Docker to 
+look in the current directory — which is why you must cd into your project 
+folder first.
+
+**Step 6 — Tag image with ECR URI**
+
+    sudo docker tag url-shortener:latest 801498844513.dkr.ecr.us-west-1.amazonaws.com/url-shortener:latest
+
+The image built in Step 5 is just called url-shortener locally — Docker has 
+no idea where it's supposed to go. Tagging renames it to include the full 
+ECR address. Think of it like putting a shipping address on a package. The 
+package is built, but without the address Docker doesn't know where to 
+deliver it.
+
+**Step 7 — Push image to ECR**
+
+    sudo docker push 801498844513.dkr.ecr.us-west-1.amazonaws.com/url-shortener:latest
+
+This is the actual step that sends the image from your machine to ECR. 
+Each layer of the image gets uploaded separately. Once pushed EC2 can pull it.
+
+**Step 8 — Launch EC2 instance**
+
+In the AWS console:
+- AMI: Ubuntu (same OS as local VM — familiar commands)
+- Instance type: t3.micro (~$0.03/hour)
+- Key pair: url-shortener-key.pem (required for SSH access, download and save safely)
+- Storage: 16GB (8GB fills up quickly with Docker images)
+- Security group: open port 22 (SSH) and port 5000 (Flask API)
+
+**Step 9 — SSH into EC2**
+
+    chmod 400 ~/Desktop/key-pairs/url-shortener-key.pem
+    ssh -i ~/Desktop/key-pairs/url-shortener-key.pem ubuntu@<public-ip>
+
+chmod 400 sets the key file to read-only for owner only — SSH refuses to 
+use key files that other users can read, it's a security requirement.
+
+EC2 is a brand new blank Ubuntu machine — nothing is installed. Every tool 
+must be set up fresh just like any new computer.
+
+**Step 10 — Install Docker and AWS CLI on EC2**
+
+    sudo apt-get update
+    sudo apt-get install -y docker.io
+    sudo apt-get install -y docker-compose
+    # Install AWS CLI
+    curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+    sudo apt-get install -y unzip
+    unzip awscliv2.zip
+    sudo ./aws/install
+
+EC2 needs Docker to run containers and AWS CLI to authenticate with ECR. 
+Every EC2 instance starts blank — this setup must be done each time you 
+create a new instance. This is one of the problems CI/CD in Phase 5 solves.
+
+**Step 11 — Configure AWS CLI on EC2 and authenticate Docker to ECR**
+
+    aws configure  # same credentials as local machine
+    aws ecr get-login-password --region us-west-1 | sudo docker login --username AWS --password-stdin 801498844513.dkr.ecr.us-west-1.amazonaws.com
+
+EC2 is a completely separate machine — it doesn't inherit any configuration 
+from your local machine. AWS CLI must be configured again with the same 
+credentials so EC2 has permission to pull from ECR.
+
+**Step 12 — Create docker-compose.yml and init.sql on EC2**
+
+    nano docker-compose.yml
+    nano init.sql
+
+EC2 has no access to your local VS Code files. These files must be recreated 
+manually on EC2. The key difference in the EC2 docker-compose.yml:
+
+Local version uses:
+    web:
+      build: .   # builds image from local Dockerfile
+
+EC2 version uses:
+    web:
+      image: 801498844513.dkr.ecr.us-west-1.amazonaws.com/url-shortener:latest
+
+EC2 pulls the pre-built image from ECR instead of building from a Dockerfile 
+since the Dockerfile and source code don't exist on EC2.
+
+Also added healthcheck so Flask waits for MySQL to be fully ready:
+    mysql-db:
+      healthcheck:
+        test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-ppassword"]
+        interval: 10s
+        timeout: 5s
+        retries: 5
+    web:
+      depends_on:
+        mysql-db:
+          condition: service_healthy
+
+**Step 13 — Open port 5000 in security group**
+
+In AWS console → EC2 → Security Groups → Edit inbound rules → Add rule:
+- Type: Custom TCP, Port: 5000, Source: 0.0.0.0/0
+
+By default EC2 blocks all incoming traffic except SSH (port 22). Opening 
+port 5000 allows public access to your Flask API. MySQL port 3306 stays 
+closed — it only needs to communicate with Flask internally between 
+containers. Exposing it publicly would be a security risk.
+
+**Step 14 — Start containers**
+
+    sudo docker compose up -d
+
+Docker pulls Flask image from ECR, pulls MySQL from Docker Hub, starts both 
+containers connected on the same network. App is now live.
+
+### Verifying it works
+Tested in Postman using the public EC2 IP:
+- POST http://18.144.188.161:5000/shorten → returns short code, 200 OK
+- GET http://18.144.188.161:5000/<short_code> → 302 redirect to original URL
+
+### Understanding what "publicly accessible" means
+The app is an API, not a website. Typing the IP in a browser shows 404 
+because there's no route for /. The app is accessible to anything that 
+can send HTTP requests — Postman, other apps, curl, or a frontend. 
+A frontend (HTML/CSS/JS) would be what regular users interact with visually, 
+but that's outside the scope of this project.
+
+### Elastic IP
+By default stopping and starting an EC2 instance assigns a new public IP. 
+An Elastic IP is a static IP that stays the same across stop/start cycles.
+
+    Allocated Elastic IP: 18.144.188.161
+
+Note: Elastic IPs are free when associated with a running instance. When 
+the instance is stopped the Elastic IP accumulates a small charge 
+(~$0.005/hour). Terminate the instance and release the Elastic IP if 
+no longer needed to avoid charges.
+
+### EC2 cost management
+- Instance running: ~$0.03/hour (t3.micro)
+- Instance stopped: ~$0 (storage only, minimal)
+- Elastic IP while stopped: ~$0.005/hour
+- Stop instance when not in use to minimize costs
+
+### Obstacles in Phase 4
+
+**Obstacle 7 — SSH host key changed**
+After stopping and restarting EC2, the host key changed causing SSH to 
+refuse connection with "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED". 
+Fixed by clearing the old key:
+
+    ssh-keygen -f '/home/justin/.ssh/known_hosts' -R '<old-ip>'
+
+This happens because stopping EC2 can change the underlying host — the 
+Elastic IP fixed the IP issue but the host key can still change.
+
+**Obstacle 8 — EC2 disk space full**
+Docker accumulated old images filling the 8GB disk to 100%. MySQL couldn't 
+initialize because there was no space to write files. Fixed by:
+
+    sudo docker system prune -a -f   # remove all unused Docker resources
+    rm awscliv2.zip                  # remove installer zip
+    rm -rf aws                       # remove installer folder
+
+Then increased EC2 volume from 8GB to 16GB in AWS console and extended 
+the filesystem:
+
+    sudo growpart /dev/nvme0n1 1
+    sudo resize2fs /dev/root
+
+**Obstacle 9 — MySQL corrupted files after disk full**
+After the disk was full MySQL left corrupted initialization files. On next 
+startup MySQL refused to initialize: "data directory has files in it". 
+Fixed by removing volumes for a clean slate:
+
+    sudo docker compose down -v
+    sudo docker compose up -d
+
+The -v flag removes volumes along with containers giving MySQL a fresh 
+start.
+
+**Obstacle 10 — Flask starting before MySQL ready**
+depends_on only waits for the MySQL container to start, not for MySQL 
+itself to finish initializing. Flask would start, immediately try to 
+connect to MySQL, and fail with "Lost connection to MySQL server". Fixed 
+by adding a healthcheck that makes Flask wait until MySQL is actually 
+ready to accept connections.
+
+---
+
 ## Saved for Later
 - Click tracking — log every redirect with timestamp, IP, user agent
 - MySQL named volume — persist data across docker compose down locally
 - AWS RDS — managed cloud database as single source of truth in production
+- Move Flask to port 80/443 with Nginx as reverse proxy
