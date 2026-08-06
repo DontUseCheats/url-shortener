@@ -1,0 +1,69 @@
+name: CI/CD Pipeline
+
+on:
+    push:
+        branches: [main]
+
+jobs:
+    test:
+        runs-on: ubuntu-latest
+        steps:
+                # Fetch the repository code onto the runner
+            - name: Checkout repository code
+              uses: actions/checkout@v4
+
+                # Setup and install python
+            - name: Set up Python
+              uses: actions/setup-python@v5
+              with:
+                python-version: '3.12'
+
+                # Install dependencies
+            - name: Install dependencies
+              run: pip install -r requirements.txt
+
+            - name: Run tests
+              run: python -m unittest test_app.py
+
+    deploy:
+        needs: test
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            # Step 1: Configure static AWS credentials login
+            - name: Configure AWS credentials
+              uses: aws-actions/configure-aws-credentials@v4
+              with:
+                aws-region: us-west-1
+                aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+                aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+            
+            # Step 2: Login to Amazon ECR
+            - name: Login to Amazon ECR
+              id: login-ecr
+              uses: aws-actions/amazon-ecr-login@v2
+
+            # Step 3: Build and push image to ECR
+            - name: Build, tag, and push docker image to Amazon ECR
+              env:
+                REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+                REPOSITORY: url-shortener
+                IMAGE_TAG: latest
+              run: |
+                docker build -t $REGISTRY/$REPOSITORY:$IMAGE_TAG .
+                docker push $REGISTRY/$REPOSITORY:$IMAGE_TAG
+
+            # Step 4: SSH into EC2 and restart containers
+            - name: SSH into EC2 and restart containers
+              uses: appleboy/ssh-action@v1.0.0
+              with:
+                host: ${{ secrets.EC2_HOST }}
+                username: ubuntu
+                key: ${{ secrets.EC2_KEY }}
+                script: |
+                    aws ecr get-login-password --region us-west-1 | sudo docker login --username AWS --password-stdin 801498844513.dkr.ecr.us-west-1.amazonaws.com
+                    sudo docker pull 801498844513.dkr.ecr.us-west-1.amazonaws.com/url-shortener:latest
+                    sudo docker compose down
+                    sudo docker compose up -d
