@@ -79,8 +79,10 @@ Flask image from ECR (Elastic Container Registry) and the MySQL image from
 Docker Hub, runs both containers, and serves the API publicly on port 5000.
 
 ### Phase 5 - CI/CD with GitHub Actions
-A GitHub Actions workflow automatically runs on every push — tests the code 
-and if tests pass, deploys the latest version to AWS automatically.
+A GitHub Actions workflow automatically triggers on every push to main. 
+Tests run first — if they pass, a new Docker image is built, pushed to ECR, 
+and EC2 automatically pulls and restarts with the updated version. You still 
+merge to main manually — CI/CD automates everything that happens after.
 
 ---
 
@@ -593,7 +595,10 @@ needs ECR since it's private.
 
 The AWS CLI lets you interact with AWS services from your terminal. Same 
 concept as how you interact with Docker and MySQL from the terminal — 
-instead of clicking through the AWS console, you run commands.
+instead of clicking through the AWS console, you run commands. We did 
+this in the terminal rather than clicking through the AWS console because 
+in Phase 5 GitHub Actions needs to run these exact commands automatically — 
+you can't click through a UI in an automated pipeline.
 
 **Step 2 — Create IAM access key and configure CLI**
 
@@ -767,12 +772,6 @@ the instance is stopped the Elastic IP accumulates a small charge
 (~$0.005/hour). Terminate the instance and release the Elastic IP if 
 no longer needed to avoid charges.
 
-### EC2 cost management
-- Instance running: ~$0.03/hour (t3.micro)
-- Instance stopped: ~$0 (storage only, minimal)
-- Elastic IP while stopped: ~$0.005/hour
-- Stop instance when not in use to minimize costs
-
 ### Obstacles in Phase 4
 
 **Obstacle 7 — SSH host key changed**
@@ -819,8 +818,260 @@ ready to accept connections.
 
 ---
 
+## Phase 5 - CI/CD with GitHub Actions
+
+### What is CI/CD and why it matters
+Without CI/CD, every time you make a change you have to manually:
+- Run tests
+- Build a new Docker image
+- Push it to ECR
+- SSH into EC2
+- Pull the new image and restart containers
+
+With CI/CD, merging to main triggers all of that automatically. You still 
+control when things go to production by deciding when to merge — CI/CD 
+just handles all the deployment work after that decision.
+
+Important clarification: CI/CD doesn't automatically update the main branch. 
+You still merge manually. What's automated is everything that happens after 
+the merge.
+
+### CI vs CD — the distinction
+CI (Continuous Integration) — every push to main automatically runs your 
+tests. Catches broken code before it reaches production.
+
+CD (Continuous Deployment) — if tests pass, automatically deploys. Builds 
+a new Docker image, pushes to ECR, SSHs into EC2, pulls the new image, 
+restarts containers.
+
+The full automated flow:
+    You merge feature branch to main
+        ↓
+    GitHub Actions triggers automatically
+        ↓
+    CI: runs unit tests
+        ↓
+    Tests pass?
+        ↓ Yes
+    CD: builds new Docker image
+        ↓
+    Pushes image to ECR
+        ↓
+    SSHs into EC2
+        ↓
+    Pulls new image and restarts containers
+        ↓
+    Live app updated — no manual steps
+
+### What are tests and why write them
+Tests are separate code files that automatically verify your app works 
+correctly. They don't live in main.py — they live in test_app.py. The test 
+file never runs in production, only in the CI pipeline.
+
+The question of what to test: verify the things you wrote, not the libraries 
+you use since those are already tested. For this project:
+- POST route returns a short code with 200 status
+- GET route returns a 302 redirect to the correct URL
+
+### Understanding unittest and mocking
+unittest is Python's built in testing library. No installation needed — 
+it comes with Python.
+
+The challenge: tests need to run without a real MySQL database. The CI 
+runner has no database. Solution: mock the database connection.
+
+Mocking means temporarily replacing a real function with a fake one during 
+testing. The real logic still runs — only the external dependency (database) 
+gets swapped out. This is the industry standard approach.
+
+    from unittest.mock import patch, MagicMock
+
+    @patch('main.get_connection')          # replaces get_connection with a fake
+    def test_post_route(self, mock_get_connection):
+        mock_conn = MagicMock()            # fake connection object
+        mock_get_connection.return_value = mock_conn  # fake returns fake conn
+        mock_conn.cursor().fetchone.return_value = None  # no collision found
+
+@patch temporarily replaces get_connection in main.py with a MagicMock. 
+Before the test runs real function gets swapped out. After the test finishes 
+real function is restored. MagicMock allows any method call on it without 
+crashing — so cursor(), execute(), commit(), close() all just work silently.
+
+The only value that needs to be explicitly set is fetchone() — it needs to 
+return None so the collision check passes and shorten_url() continues to 
+the INSERT.
+
+### Why only fake get_connection and not shorten_url
+The rule is: fake anything that talks to an external service. 
+get_company() is the boundary between your code and MySQL. shorten_url() 
+itself doesn't talk to anything external — it just calls get_connection() 
+and does logic. So you fake the boundary, test the real logic.
+
+### Understanding response.headers['Location']
+When Flask calls redirect('https://www.google.com') it doesn't return the 
+URL as text in the response body. It returns a 302 response with a Location 
+header that tells the browser where to go. The URL lives in the header, not 
+the body — that's the HTTP standard for redirects.
+
+    self.assertIn('https://www.google.com', response.headers['Location'])
+
+### The test file
+
+    import unittest
+    from main import app
+    from unittest.mock import patch, MagicMock
+
+    class TestApp(unittest.TestCase):
+        def setUp(self):
+            app.config['TESTING'] = True
+            self.client = app.test_client()
+
+        @patch('main.get_connection')
+        def test_post_route(self, mock_get_connection):
+            mock_conn = MagicMock()
+            mock_get_connection.return_value = mock_conn
+            mock_conn.cursor().fetchone.return_value = None
+
+            response = self.client.post('/shorten', json={'url': 'https://www.google.com'})
+
+            self.assertEqual(response.status_code, 200)
+            response_text = response.data.decode('utf-8')
+            self.assertEqual(len(response_text), 6)
+
+        @patch('main.get_connection')
+        def test_get_route(self, mock_get_connection):
+            mock_conn = MagicMock()
+            mock_get_connection.return_value = mock_conn
+            mock_conn.cursor().fetchone.return_value = ('https://www.google.com',)
+
+            response = self.client.get('/abc123')
+
+            self.assertEqual(response.status_code, 302)
+            self.assertIn('https://www.google.com', response.headers['Location'])
+
+### GitHub Actions workflow file
+Stored at .github/workflows/deploy.yml. This file defines the entire 
+pipeline. GitHub reads it automatically on every push to main.
+
+Structure:
+- name — label shown in the Actions tab
+- on: push: branches: [main] — trigger condition
+- jobs — the work to do
+- needs: test — deploy only runs if test passes
+- runs-on: ubuntu-latest — GitHub spins up a fresh Ubuntu VM for each job
+
+Each job runs on a separate fresh VM — neither job shares anything with 
+the other. Both need their own checkout step to get the code.
+
+    name: CI/CD Pipeline
+
+    on:
+      push:
+        branches: [main]
+
+    jobs:
+      test:
+        runs-on: ubuntu-latest
+        steps:
+          - name: Checkout repository code
+            uses: actions/checkout@v4
+
+          - name: Set up Python
+            uses: actions/setup-python@v5
+            with:
+              python-version: '3.12'
+
+          - name: Install dependencies
+            run: pip install -r requirements.txt
+
+          - name: Run tests
+            run: python -m unittest test_app.py
+
+      deploy:
+        needs: test
+        runs-on: ubuntu-latest
+        steps:
+          - name: Checkout code
+            uses: actions/checkout@v4
+
+          - name: Configure AWS credentials
+            uses: aws-actions/configure-aws-credentials@v4
+            with:
+              aws-region: us-west-1
+              aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+              aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+          - name: Login to Amazon ECR
+            id: login-ecr
+            uses: aws-actions/amazon-ecr-login@v2
+
+          - name: Build, tag, and push docker image to Amazon ECR
+            env:
+              REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+              REPOSITORY: url-shortener
+              IMAGE_TAG: latest
+            run: |
+              docker build -t $REGISTRY/$REPOSITORY:$IMAGE_TAG .
+              docker push $REGISTRY/$REPOSITORY:$IMAGE_TAG
+
+          - name: SSH into EC2 and restart containers
+            uses: appleboy/ssh-action@v1.0.0
+            with:
+              host: ${{ secrets.EC2_HOST }}
+              username: ubuntu
+              key: ${{ secrets.EC2_KEY }}
+              script: |
+                aws ecr get-login-password --region us-west-1 | sudo docker login --username AWS --password-stdin 801498844513.dkr.ecr.us-west-1.amazonaws.com
+                sudo docker pull 801498844513.dkr.ecr.us-west-1.amazonaws.com/url-shortener:latest
+                sudo docker compose down
+                sudo docker compose up -d
+
+### GitHub Secrets
+Credentials the workflow needs are stored as GitHub Secrets — never in code. 
+Stored under repo Settings → Secrets and variables → Actions.
+
+Secrets used:
+- AWS_ACCESS_KEY_ID — authenticates GitHub Actions to AWS
+- AWS_SECRET_ACCESS_KEY — authenticates GitHub Actions to AWS
+- EC2_HOST — the Elastic IP so the workflow knows which server to deploy to
+- EC2_KEY — the private key that lets GitHub Actions SSH into EC2
+
+${{ secrets.SECRET_NAME }} is how the workflow references them. The actual 
+values are never visible in logs or code — substituted securely at runtime.
+
+### Access keys vs OIDC
+Two ways to authenticate GitHub Actions to AWS:
+
+Access Keys (what we use) — static credentials stored in GitHub Secrets. 
+Simpler to set up. Fine for learning projects.
+
+OIDC (OpenID Connect) — no stored credentials. GitHub and AWS establish 
+a trust relationship. GitHub gets a temporary token per workflow run. More 
+secure, industry standard for production. Worth upgrading to later.
+
+### Obstacle 11 — SSH key not found
+First deploy attempt failed with "ssh: no key found". The EC2_KEY secret 
+wasn't being read correctly — the .pem file contents weren't copied 
+completely into GitHub Secrets. Fixed by re-adding the secret making sure 
+to copy the entire file including the header and footer lines:
+
+    -----BEGIN RSA PRIVATE KEY-----
+    ...all content...
+    -----END RSA PRIVATE KEY-----
+
+### Obstacle 12 — Deploy job appeared stuck
+Deploy job ran for over 5 minutes and appeared frozen. It was actually 
+working — pulling the Docker image layer by layer, stopping old containers, 
+initializing MySQL with the healthcheck, and starting Flask. The healthcheck 
+makes Flask wait for MySQL to be fully ready before starting which adds time. 
+Eventually all steps completed and the pipeline showed green.
+
+---
+
 ## Saved for Later
 - Click tracking — log every redirect with timestamp, IP, user agent
 - MySQL named volume — persist data across docker compose down locally
 - AWS RDS — managed cloud database as single source of truth in production
 - Move Flask to port 80/443 with Nginx as reverse proxy
+- Add restart: always to docker-compose for auto-start on EC2 boot
+- Upgrade authentication from access keys to OIDC for production security
