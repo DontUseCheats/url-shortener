@@ -16,7 +16,7 @@ the next. README shows the documentation and learning/thought process.
 
 ---
 
-# Goals
+## Goals
 - Build a real backend service from scratch
 - Learn Flask REST API design
 - Learn MySQL database integration
@@ -1065,6 +1065,59 @@ working — pulling the Docker image layer by layer, stopping old containers,
 initializing MySQL with the healthcheck, and starting Flask. The healthcheck 
 makes Flask wait for MySQL to be fully ready before starting which adds time. 
 Eventually all steps completed and the pipeline showed green.
+
+# KUBECTL
+The goal here is to refactor the project and incorporate kubectl
+
+## Steps
+1. Install kubectl
+2. Verify kubectl
+3. Install minikube
+4. start my cluster
+5. Confirm its running
+
+-> 1. I have to download the latest stable kubectl binary and make it executable since this is my first time
+
+-> 2. Run 'kubectl version --client' to confirm it installed correctly
+
+-> 3. I have to download the minikube binary
+
+-> 4. Run 'minikube start' which starts up a local single-node Kubernetes cluster using Docker as the driver
+
+-> 5. Run 'kubectl get nodes'
+
+## Node
+A node is just one machine - could be a physical server, VM or a cloud instance (EC2) - thats part of a Kubernetes cluster and actually runs your containers.
+
+## Cluster
+A cluster is a whole system: one or more nodes that are managed together as a single unit, plus a control plane - the "brain" that makes decisions (which node should run which Pod, whether something crashed and needs restarting, etc) so "cluster" = control plane + the nodes its managing
+
+## Single-node
+Single-node means that the entire cluster - control plane and the actual workload - running part lives on one machine instead of being spread across several. Thats where minikube comes in, gives you a miniature cluster where your one VM is pretending to be both the brain and the worker. Note that real production clusters almost always have multiple nodes (often across multiple physical machines or availability zones)
+
+## Pod
+The smallest unit Kubernetes manages. Almost always, one Pod = one running instance of your container (Ex, one instance of your Flask app). Pods are disposable - Kubernetes can kill and recreate them at any time, and they get a new internal IP each time that happens.
+
+## Deployment
+Manages a set of identical Pods for you. You declare "I want 3 replicas of my Flask app running" and the Deployments job is to make that true at all times. If a Pod crashes or gets deleted then Deployment notices and creates a replacement automatically. Essentially it self-heals and provides easy scaling. 
+
+## Service
+Gives your Pods (which are constantly changing) a stable network address. Since Pods get new IPs every time they're recreated, we can't just hardcode "talk to Pod at 10.0.0.5" - That IP may not exist in the next 5 minutes from now. A Service sits in front of a group of Pods, it gets a stable internal DNS name/IP, and load-balances incoming traffic across whichever Pods are currently alive.
+
+## kubectl - general purpose tool
+Installation is a one time case which then serves as a general-purpose tool. I would use this kubectl binary not just for this project but for every future Kubernetes project.
+
+kubectl is the command-line client for talking to any kubernetes cluster. It itself doesn't run a cluster but it just sends API requests to whatever cluster it's currently pointed.
+
+kubectl reads a config file (~/.kube/config) that tells it which cluster to talk to and how to authenticate.
+
+## minikube - local-only, for learning/dev
+minikube is specifically a tool for running a lightweight, single-node Kubernetes cluster on your own machine. Serves as a training-wheel tool that anyone learning k8s (kubernetes) uses. Not meant to be carried forward into actual production deployment.
+
+Its whole purpose is local development and learning. This is so I can experiment with real Kubernetes objects (Pods, Deployments, Services) without needing cloud infrastructure or incurring AWS costs while i'm still learning the concepts.
+
+Not meant for use in real production - nobody runs minikube for a real deployed app. When moving over to EKS later, minikube goes away and kubectl points at the EKS cluster instead. 
+
 
 ---
 
