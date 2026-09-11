@@ -12,6 +12,8 @@ spec:
       labels:
         app: flask-app
     spec:
+      imagePullSecrets:
+      - name: ecr-secret
       containers:
       - name: flask
         image: 801498844513.dkr.ecr.us-west-1.amazonaws.com/url-shortener:latest
