@@ -1057,6 +1057,9 @@ Not meant for use in real production - nobody runs minikube for a real deployed 
 ## Kubernetes Manifest
 The "instructions" (YAML) that tells Kubernetes what we want to exist, and Kubernetes works to make reality match it. Manifest doesn't tell Kubernetes how to start a Pod. It tells Kubernetes (declarative) what the end result should look like and Kubernetes figures out how to make it. Essentially describing a desired state.
 
+### AWS credentials
+minikube is running as an isolated environment. Meaning it won't have our AWS credentials to authenticate against the private ECR repo we created. We need to give minikube AWS credential access to pull from ECR. This step will be worked on after creating the Kubernetes Manifest.
+
 ### Creating YAML Deployment
 Deployment Manifest is meant for one component at a time. I'll need to create two separate YAML deployment files. One is for the Flask application. Second is deployment for MySQL. These are two distinct pieces that behave completely different.
 
@@ -1071,6 +1074,94 @@ Why? It was noted earlier that MySQL runs as one truth, one persistent database.
 
 The image specified is the URI address of the image which is the ECR path we created earlier.
 
+Terminal commands to run the Deployment manifest.
 
-### AWS credentials
-minikube is running as an isolated environment. Meaning it won't have our AWS credentials to authenticate against the private ECR repo we created. We need to give minikube AWS credential access to pull from ECR. This step will be worked on after creating the Kubernetes Manifest.
+    1. kubectl apply -f k8s/deployment.yaml
+    2. kubectl get deployments
+    3. kubectl get pods
+
+2 - Shows the state of our Deployment objects. High-level manager, not individual containers. Shows how many replicas are desired vs how many are actually ready and available.
+
+3 - Shows the actual individual Pods (One line per Pod) - the real running or failing instances.
+
+Given that we haven't set up ECR authentication yet, expectedly the pods show a STATUS "ErrImagePull". Kubernetes is trying to schedule 3 Pods, attempting to pull the image and correctly failing because minikube has no AWS credentials and can't authenticate to our private ECR repo yet.
+
+## AWS credentials
+Our Flask image sits in our private ECR repository. Unlike phase 4 where we configured the AWS credentials into our local machine and EC2 before Docker could pull from it. minikube's cluster is a completely separate, isolated environment from our host machine. It has no idea our AWS credentials exist despite being in our VM's "~/.aws/credentials"
+
+Two common ways to solve this in Kubernetes:
+
+1. Create a Kubernetes Secret containing Docker registry credentials, then reference that Secret in our Deployment manifest via imagePullSecrets. Essentially manually generating a Docker auth token and handing it to Kubernetes as a Secret object.
+
+2. Use an add-on/service account approach tying minikube to our AWS IAM credentials more automatically. More relevant on real EKS with IAM roles for service accounts, but overkill for local learning.
+
+For this local project we'll be doing method 1. Below is terminal command to create kubectl Secret. We're generating the same ECR login token we've used before but we're handing it to Kubernetes instead of Docker directly.
+
+    kubectl create secret docker-registry ecr-secret \
+  --docker-server=801498844513.dkr.ecr.us-west-1.amazonaws.com \
+  --docker-username=AWS \
+  --docker-password=$(aws ecr get-login-password --region us-west-1)
+
+We now reference this Secret in our Deployment manifest, so Kubernetes actually uses it when pulling our image. create a imagePullSecrets field under spec.template.spec. This tells Kubernetes that whenever it tries to pull any image in this Pod to authenticate using this Secret.
+
+    imagePullSecrets:
+    - name: ecr-secret
+
+### Credentials
+Every 12 hours the Docker registry login token expires. When expired delete and recreate. Since its a temporary credential specifically scoped to permission to pull/push Docker images from ECR, its only valid for the next 12 hours.
+
+    1. kubectl delete secret ecr-secret
+
+    2. kubectl create secret docker-registry ecr-secret \
+    --docker-server=801498844513.dkr.ecr.us-west-1.amazonaws.com \
+    --docker-username=AWS \
+    --docker-password=$(aws ecr get-login-password --region us-west-1)
+
+    3. kubectl rollout restart deployment flask-deployment
+
+    4. kubectl get pods
+
+1. Deletes the old expired 12-hour Docker registry login token.
+
+2. Creates the new Docker registry login token
+
+3. Force Kubernetes to fresh rollout so the new token gets used.
+
+4. Examine and check new Pods.
+
+AWS credentials (long-lived) -> generate -> ECR Docker token (12-hour lifespan) -> stored inside -> Kubernetes Secret (inherits that same 12-hour limit since its holding a copy of the token).
+
+## Service.yaml
+Running Pods have no stable way for anything to actually talk to them. Each Pod has its own internal IP that could change if it gets recreated. Creating a Service fixes this problem by sitting in front of these Pods giving them one stable address, and load-balances traffic across whichever are currently healthy. 
+
+Note - A Service does not make the Pods keep a stable IP. A Service provides a permanent front door that doesn't care if the Pods behind it keep changing. By providing itself a stable IP/DNS name and sits in front of these Pods, forwarding traffic to whichever ones currently exist.
+
+    1. apiVersion: v1
+    2. kind: Service
+    3. metadata:
+    4.     name: flask-service
+    5. spec:
+    6.     selector:
+    7.         app: flask-app
+    8.     ports:
+    9.         - port: 5000
+    10.        targetPort: 5000
+    11.    type: NodePort
+
+7. Needs to match Pod name we gave in Deployment manifest.
+8. Open to same ports exposed in Deployment manifest.
+11. Type NodePort needed due to needing outside cluster testing for Postman
+
+### ClusterIP
+(default type if none specified) Makes the Service reachable only from inside the cluster. Other Pods can reach it, nothing outside the cluster can. Used for internal-only communication.
+
+### NodePort
+Builds on top of ClusterIP. Internal address, but additionally opens a specific port on the node itself that's reachable from outside the cluster. Good for local development/testing such as Postman
+
+### LoadBalancer
+Builds on top of NodePort. Requests an actual external load balancer from whatever cloud provider we're running (AWS in our case) giving you a single stable public IP or DNS name that routes traffic in and from the internet. Typically a production-standard way to expose a service publicly. The cloud provider handles the load balancing infrastructure for you.
+
+Layering to remember: 
+1. ClusterIP -> NodePort (adds external node access)
+2. NodePort -> LoadBalancer (adds a real cloud load balancer in front)
+
