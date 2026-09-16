@@ -1165,3 +1165,90 @@ Layering to remember:
 1. ClusterIP -> NodePort (adds external node access)
 2. NodePort -> LoadBalancer (adds a real cloud load balancer in front)
 
+## MySQL
+MySQL needs to be deployed into the cluster with its own Deployment + Service. Separate yaml files need to be created for MySQL as a Deployment manifest is meant for one component at a time, not one application as a whole.
+
+### MySQL Deployment manifest
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+        name: mysql-deployment                  # Label change
+    spec:
+        replicas: 1
+        selector:
+            matchLabels:
+                app: mysql                      # Label change
+        template:
+            metadata:
+                labels:
+                    app: mysql                  # Label change
+            spec:
+                containers:
+                - name: mysql                   # Label change
+                    image: mysql:8.0            # Pulling from Docker Hub
+                    ports:
+                    - containerPort: 3306       # MySQL's listening port
+
+Same skeleton setup as before but with changes. Removed imagePullSecrets as MySQL's image is pulled from Docker Hub which is a public registry. So no authentication or Secret required.
+
+We also need to add the Environment variables (MYSQL_DATABASE, MYSQL_ROOT_PASSWORD). The MySQL container needs to know what database to create or what root password to set on startup. Value needs to be same as to what we set in MySQL, our docker-compose.yaml file has the exact variable names and values we used. 
+
+            env:
+            - name: MYSQL_ROOT_PASSWORD
+              value: password
+            - name: MYSQL_DATABASE
+              value: url_shortener
+
+env sets environment variables (MYSQL_ROOT_PASSWORD, MYSQL_DATABASE) that MySQL's startup script reads to configure itself (what password to set, what database name to create). 
+
+### init.sql volume
+Need to create a init.sql volume section as the MySQL image needs to create the database with our tables.
+
+1. Create ConfigMap containg init.sql content
+2. Reference it as a volume in the Deployment
+
+Kubernetes doesn't let you reference a file straight off our VM's disk. Instead the approach is to store the SQL content inside Kubernetes itself as a ConfigMap (a Kubernetes object for storing configuration data, similar to a Secret, but for non-sensitive plain data). Then mount that ConfigMap as a volume into the container putting it in the same spot MySQL expects it. 
+
+    1.     volumeMounts:
+    2.         - name: init-sql-volume
+    3.         mountPath: /docker-entrypoint-initdb.d
+    4.   volumes:
+    5.     - name: init-sql-volume
+    6.       configMap:
+    7.         name: mysql-init-sql
+
+Line 1 - volumeMounts(inside the container) - name: init-sql-volume is just a label connecting this mount to the actual volume definition below.
+
+Line 3 - is where inside the container this gets placed. Matching the exact folder MySQL's official image scans on startup (same folder our Docker volume mount used in Phase 3)
+
+Line 4-7 - volumes (at the Pod level, same indentation as containers) this is where the actual source is defined. Pulls the data from that ConfigMap we just created.
+
+## MySQL RECAP
+We created mysql-deployment.yaml as a separate file from mysql-service.yaml, since Deployments are scoped to one component at a time — Flask and MySQL are two different components with different needs (3 replicas vs. 1, different images, different registries), so each app can need multiple Deployments. 
+
+We removed imagePullSecrets since MySQL's image comes from Docker Hub (public), unlike Flask's private ECR image — no auth needed.
+
+We added env to set MySQL's startup configuration (root password, database name) — the same variables docker-compose passed via environment:. Since Kubernetes can't mount a file straight from the VM's disk the way Docker Compose did, we stored init.sql's content as a ConfigMap — a Kubernetes object for holding non-sensitive configuration data — then mounted that ConfigMap as a volume into the container, landing it at the same path (/docker-entrypoint-initdb.d) MySQL automatically scans on startup to create the urls table.
+
+### MySQL Service
+
+    1. apiVersion: v1
+    2. kind: Service
+    3. metadata:
+    4.     name: mysql-db          
+    5. spec:
+    6.     selector:
+    7         app: mysql
+    8.     ports:
+    9.        - port: 3306
+    10.       targetPort: 3306
+    11.    type: ClusterIP
+
+Line 4 - Name needs to match Flask code's get_connection() host name (mysql-db)
+
+Line 7 - Label needs to match MySQL Pods in the deployment.yaml file.
+
+Apply and confirm mysql-db exists.
+
+    kubectl apply -f k8s/mysql-service.yaml
+    kubectl get services
